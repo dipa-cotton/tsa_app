@@ -56,6 +56,116 @@ struct LabeledField: View {
     }
 }
 
+// MARK: - Events (edit this list to add or rename events)
+enum Events {
+    static let all = [
+        "animatronics",
+        "architectural design",
+        "artificial intelligence",
+        "audio podcasting",
+        "automated manufacturing systems",
+        "biotechnology design",
+        "board game design",
+        "cad architecture",
+        "cad engineering",
+        "cad foundations",
+        "career prep",
+        "challenging technology issues",
+        "chapter team",
+        "childrens stories",
+        "coding",
+        "community service video",
+        "construction challenge",
+        "cybersecurity",
+        "data science",
+        "debating tech issues",
+        "digital photography",
+        "digital video production",
+        "dragster design",
+        "drone challenge",
+        "electrical applications",
+        "engineering design",
+        "extemporaneous speech",
+        "fashion design",
+        "flight",
+        "flight endurance",
+        "forensic science technology",
+        "future technology teacher",
+        "hybrid racer xl",
+        "interior design",
+        "inventions and innovations",
+        "manufacturing prototype",
+        "mass production",
+        "mechanical engineering",
+        "medical technology",
+        "microcontroller design",
+        "music production",
+        "off the grid",
+        "on demand video",
+        "photographic technology",
+        "prepared presentation",
+        "prepared speech",
+        "problem solving",
+        "promotional design",
+        "robotics",
+        "software development",
+        "solar racer",
+        "stem animation",
+        "stem mass media",
+        "structural design",
+        "system control technology",
+        "tech bowl",
+        "technical design",
+        "transportation modeling",
+        "video game design",
+        "virtual reality",
+        "vlogging",
+        "webmaster",
+        "website design"
+    ]
+}
+
+/// Type to narrow the list, then tap an event to select it.
+struct EventPicker: View {
+    @Binding var text: String
+    @FocusState private var focused: Bool
+
+    var matches: [String] {
+        let t = text.lowercased().trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return Events.all }
+        let tokens = t.split(separator: " ").map(String.init)
+        return Events.all.filter { e in tokens.allSatisfy { e.contains($0) } }
+            .sorted { ($0.hasPrefix(t) ? 0 : 1) < ($1.hasPrefix(t) ? 0 : 1) }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Pill(text: "enter event name:", size: 20)
+            TextField("", text: $text, prompt: Text("start typing…").foregroundColor(Theme.ink.opacity(0.5)))
+                .font(Theme.font(22)).foregroundColor(Theme.ink).multilineTextAlignment(.center)
+                .autocorrectionDisabled().textInputAutocapitalization(.never)
+                .focused($focused)
+                .padding(.vertical, 14).background(Theme.field, in: RoundedRectangle(cornerRadius: 30))
+            if focused {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(matches, id: \.self) { e in
+                            Button { text = e; focused = false } label: {
+                                Text(e).font(Theme.font(20)).foregroundColor(Theme.ink)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                            }
+                            Divider()
+                        }
+                        if matches.isEmpty { Text("No matching event").font(Theme.font(18)).foregroundColor(Theme.ink).padding(14) }
+                    }
+                }
+                .frame(maxHeight: 220)
+                .background(Theme.field, in: RoundedRectangle(cornerRadius: 24))
+            }
+        }
+    }
+}
+
 // MARK: - Navigation
 enum Screen { case landing, role, judge, login, home }
 
@@ -158,7 +268,7 @@ struct JudgeView: View {
             VStack(spacing: 12) {
                 Heading(t: "Judge")
                 LabeledField(label: "enter student ID:", text: $sid)
-                LabeledField(label: "enter event name:", text: $event)
+                EventPicker(text: $event)
                 Text("this is a:").font(Theme.font(34)).foregroundColor(Theme.ink)
                 VStack(alignment: .leading, spacing: 10) { check("rubric"); check("comment card") }.padding(.horizontal, 60)
                 PhotosPicker(selection: $item, matching: .images) { Pill(text: "upload a photo", size: 30) }
@@ -179,10 +289,12 @@ struct JudgeView: View {
     }
 
     func send() async {
-        guard let image, !sid.isEmpty, !event.isEmpty else { status = "Add a photo, student ID and event name."; return }
+        let ev = event.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let image, !sid.isEmpty else { status = "Add a photo and a student ID."; return }
+        guard Events.all.contains(ev) else { status = "Pick an event from the list."; return }
         busy = true; defer { busy = false }
         do {
-            try await store.send(image, to: sid, event: event, kind: kind)
+            try await store.send(image, to: sid, event: ev, kind: kind)
             self.image = nil; item = nil; sid = ""; event = ""; status = "Sent ✓"
         } catch { status = error.localizedDescription }
     }
