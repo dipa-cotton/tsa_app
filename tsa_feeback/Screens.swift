@@ -62,23 +62,25 @@ enum Screen { case landing, role, judge, login, home }
 struct RootView: View {
     @EnvironmentObject var store: Store
     @State private var screen = Screen.landing
+    @AppStorage("role") private var role = ""   // "judge" or "student", locked once chosen
+
+    func destination(_ r: String) -> Screen { r == "judge" ? .judge : (store.ids.isEmpty ? .login : .home) }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             GridBackground()
             Group {
                 switch screen {
-                case .landing: Landing { screen = .role }
-                case .role: RoleView(judge: { screen = .judge }, student: { screen = store.ids.isEmpty ? .login : .home })
+                case .landing: Landing { screen = role.isEmpty ? .role : destination(role) }
+                case .role: RoleView { role = $0; screen = destination($0) }
                 case .judge: JudgeView()
                 case .login: LoginView { screen = .home }
                 case .home: HomeView { screen = .login }
                 }
             }
-            if screen != .landing {
+            if screen == .role || (screen == .login && !store.ids.isEmpty) {   // no way back across roles
                 Button {
-                    let back: [Screen: Screen] = [.role: .landing, .judge: .role, .home: .role]
-                    screen = back[screen] ?? (store.ids.isEmpty ? .role : .home)
+                    screen = screen == .role ? .landing : .home
                 } label: {
                     Image(systemName: "chevron.left").font(.title2.bold()).foregroundColor(Theme.ink).padding(18)
                 }
@@ -110,14 +112,20 @@ struct Landing: View {
 }
 
 struct RoleView: View {
-    let judge: () -> Void, student: () -> Void
+    let choose: (String) -> Void
+    @State private var pending = ""
     var body: some View {
         VStack(spacing: 28) {
             Text("I'm a:").font(Theme.font(48, bold: true)).foregroundColor(Theme.ink).padding(.top, 50)
-            Button(action: judge) { Pill(text: "Judge", size: 52) }
-            Button(action: student) { Pill(text: "Student", size: 52) }
+            Button { pending = "judge" } label: { Pill(text: "Judge", size: 52) }
+            Button { pending = "student" } label: { Pill(text: "Student", size: 52) }
             Spacer()
-        }.padding(.horizontal, 28)
+        }
+        .padding(.horizontal, 28)
+        .alert("Continue as a \(pending)?", isPresented: Binding(get: { !pending.isEmpty }, set: { if !$0 { pending = "" } })) {
+            Button("Continue") { let r = pending; choose(r) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("You can't switch roles on this device afterwards.") }
     }
 }
 
@@ -213,6 +221,7 @@ struct HomeView: View {
     @EnvironmentObject var store: Store
     let add: () -> Void
     @State private var sel: InboxMessage?
+    @State private var editing: IDItem?
 
     var body: some View {
         ScrollView {
@@ -224,11 +233,60 @@ struct HomeView: View {
                     Button { sel = m } label: { Pill(text: "\(m.to) - \(m.event)\n\(m.kind)", fill: Theme.field, size: 22) }
                 }
                 Pill(text: "All event IDs", size: 32).padding(.top, 10)
-                ForEach(store.ids, id: \.self) { Pill(text: $0, fill: Theme.field, size: 30) }
+                ForEach(store.ids, id: \.self) { id in
+                    Button { editing = IDItem(id: id) } label: { Pill(text: "\(id)  ✎", fill: Theme.field, size: 30) }
+                }
                 if store.ids.count < 6 { Button(action: add) { Pill(text: "Add more!", fill: Theme.ink, fg: .white, size: 32) } }
             }.padding(.horizontal, 28).padding(.bottom, 30)
         }
         .sheet(item: $sel) { MessageSheet(message: $0) }
+        .sheet(item: $editing) { EditIDSheet(sid: $0.id) }
+    }
+}
+
+struct IDItem: Identifiable { let id: String }
+
+struct EditIDSheet: View {
+    @EnvironmentObject var store: Store
+    @Environment(\.dismiss) var dismiss
+    let sid: String
+    @State private var text = ""
+    @State private var err = ""
+    @State private var busy = false
+    @State private var confirmRemove = false
+
+    var body: some View {
+        ZStack {
+            GridBackground()
+            VStack(spacing: 14) {
+                Text("Edit ID").font(Theme.font(40)).foregroundColor(Theme.ink).padding(.top, 30)
+                TextField("", text: $text).font(Theme.font(26)).foregroundColor(Theme.ink).multilineTextAlignment(.center)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .padding(.vertical, 16).background(Theme.field, in: RoundedRectangle(cornerRadius: 34))
+                Button { Task { await save() } } label: {
+                    Pill(text: busy ? "Working…" : "Save", fill: Theme.ink, fg: .white, size: 30)
+                }.disabled(busy)
+                Button { confirmRemove = true } label: { Text("Remove this ID").font(Theme.font(22)).foregroundColor(.red) }
+                Text("Changing or removing an ID deletes any messages sent to the old one.")
+                    .font(Theme.font(16)).foregroundColor(Theme.ink).multilineTextAlignment(.center)
+                if !err.isEmpty { Text(err).font(Theme.font(18)).foregroundColor(.red) }
+                Spacer()
+            }.padding(.horizontal, 28)
+        }
+        .onAppear { text = sid }
+        .alert("Remove \(sid)?", isPresented: $confirmRemove) {
+            Button("Remove", role: .destructive) { Task { await run { try await store.remove(sid) } } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Messages sent to this ID will be deleted.") }
+    }
+
+    func save() async {
+        if text.trimmingCharacters(in: .whitespaces).lowercased() == sid { dismiss(); return }
+        await run { try await store.rename(sid, to: text) }
+    }
+    func run(_ work: () async throws -> Void) async {
+        busy = true; defer { busy = false }
+        do { try await work(); dismiss() } catch { err = error.localizedDescription }
     }
 }
 
